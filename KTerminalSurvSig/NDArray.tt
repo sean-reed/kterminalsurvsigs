@@ -1,0 +1,356 @@
+﻿<#@ template debug="false" hostspecific="false" language="C#" #>
+<#@ assembly name="System.Core" #>
+<#@ import namespace="System.Linq" #>
+<#@ import namespace="System.Text" #>
+<#@ import namespace="System.Collections.Generic" #>
+<#@ output extension=".cs" #>
+
+<# Type[] types = new[] {
+    typeof(Int32), typeof(Int64),
+    typeof(UInt32), typeof(UInt64),
+	typeof(float), typeof(double),
+    };
+#>
+
+using System;
+using System.Text;
+using System.Collections.Generic;
+using System.Linq;
+
+namespace KTerminalNetworkBDD
+{
+
+			<# foreach (var type in types) {
+		#>
+	/// <summary>
+    /// Numpy style multidimensional array.
+    /// </summary>
+    public class NDArray<#= type.Name #>
+    {
+        /// <summary>
+        /// Length of each dimension.
+        /// </summary>
+        public int[] Shape { get; private set; }
+
+        /// <summary>
+        /// Number of dimensions.
+        /// </summary>
+        public int Rank { get { return Shape.Length; } }
+
+        /// <summary>
+        /// Distance between adjacent elements in each dimension.
+        /// </summary>
+        public int[] Strides { get; private set; }
+
+        /// <summary>
+        /// Number of elements in array.
+        /// </summary>
+        public int Length { get { return _values.Length; } }
+
+        private <#= type.Name #>[] _values; // Values stored in the array.
+
+        public static NDArray<#= type.Name #> FromValues(<#= type.Name #>[] values)
+        {
+            int[] shape = new int[] { values.Length };
+            NDArray<#= type.Name #> array = new NDArray<#= type.Name #>(shape);
+            for (int i = 0; i < values.Length; i++)
+            {
+                array._values[i] = values[i];
+            }
+
+            return array;
+        }
+
+        public static NDArray<#= type.Name #> FromValues(<#= type.Name #>[,] values)
+        {
+            int dim0Length = values.GetLength(0);
+            int dim1Length = values.GetLength(1);
+                
+            int[] shape = new int[] {dim0Length, dim1Length};
+            NDArray<#= type.Name #> array = new NDArray<#= type.Name #>(shape);
+
+            for (int i = 0; i < dim0Length; i++)
+            {
+                for (int j = 0; j < dim1Length; j++)
+                {
+                    array._values[i * array.Strides[0] + j * array.Strides[1]] = values[i, j];
+                }
+            }
+
+            return array;
+        }
+
+        public static NDArray<#= type.Name #> FromValues(<#= type.Name #>[,,] values)
+        {
+            int dim0Length = values.GetLength(0);
+            int dim1Length = values.GetLength(1);
+            int dim2Length = values.GetLength(2);
+
+            int[] shape = new int[] { dim0Length, dim1Length, dim2Length };
+            NDArray<#= type.Name #> array = new NDArray<#= type.Name #>(shape);
+
+            for (int i = 0; i < dim0Length; i++)
+            {
+                for (int j = 0; j < dim1Length; j++)
+                {
+                    for (int k = 0; k < dim2Length; k++)
+                    {
+                        array._values[i * array.Strides[0] + j * array.Strides[1] + k * array.Strides[2]] = values[i, j, k];
+                    }
+                }
+            }
+
+            return array;
+        }
+
+        public static NDArray<#= type.Name #> Sum(NDArray<#= type.Name #> a, NDArray<#= type.Name #> b)
+        {
+            if (a.Shape.Length != b.Shape.Length)
+                throw new ArgumentException("Dimensions of arrays to be summed to do match.");
+            else
+            {
+                for (int i = 0; i < a.Shape.Length; i++)
+                {
+                    if (a.Shape[i] != b.Shape[i])
+                        throw new ArgumentException("Lengths of signatures does not match in dimension {0}.", i.ToString());
+                }
+            }
+
+            NDArray<#= type.Name #> summed = new NDArray<#= type.Name #>(a.Shape);
+            for (int i = 0; i < summed.Length; i++)
+            {
+                summed._values[i] = a._values[i] + b._values[i];
+            }
+
+            return summed;
+        }
+
+        private static IEnumerable<int> ValueIndices(int rank, int[] strides, int[] lowerIndices, int[] upperIndices)
+        {
+            return ValueIndices(rank, strides, lowerIndices, upperIndices, 0, 0);
+        }
+
+        private static IEnumerable<int> ValueIndices(int rank, int[] strides, int[] lowerIndices, int[] upperIndices, int currentDimension, int valueIndex)
+        {
+            if (currentDimension == rank)
+            {
+                yield return valueIndex;
+            }
+            else
+            {
+                for (int i = lowerIndices[currentDimension]; i <= upperIndices[currentDimension]; i++)
+                {
+                    valueIndex += strides[currentDimension] * i;
+
+                    ValueIndices(rank, strides, lowerIndices, upperIndices, currentDimension + 1, valueIndex);
+                }
+            }
+        }
+
+        /// <summary>
+        /// Non-rotational shift of an array in a specified dimension by one position forward.
+        /// </summary>
+        /// <param name="a">The input array.</param>
+        /// <param name="dim">The dimension in which to shift.</param>
+        /// <returns>The shifted output array.</returns>
+        public static NDArray<#= type.Name #> ShiftOne(NDArray<#= type.Name #> a, int dim)
+        {
+            if (dim < 0 || dim > a.Rank) throw new ArgumentOutOfRangeException("dim");
+
+            NDArray<#= type.Name #> result = new NDArray<#= type.Name #>(a.Shape);
+
+            int dimShape = a.Shape[dim];
+            int shiftStride = a.Strides[dim];
+            int consecutiveShifts = shiftStride * (dimShape - 1); // Number of consecutive elements in _values that are shifted.
+            int consecutiveSameDimIndex = shiftStride * dimShape; // Number of consecutive elements in _values that have the same index in dimension dim.
+
+            for (int i = 0; i < a._values.Length; i += consecutiveSameDimIndex) // Jump to first element at next index in dimension dim at each iteration.
+            {
+                for (int j = i; j < consecutiveShifts + i; j++) // Copy the shifted values from the next index in dimension dim to the result array.
+                {
+                    result._values[j + shiftStride] = a._values[j];
+                }
+            }
+
+            return result;
+        }
+
+        /// <summary>
+        /// Non-rotational shift.
+        /// </summary>
+        /// <param name="a"></param>
+        /// <param name="shift"></param>
+        /// <returns></returns>
+        public static NDArray<#= type.Name #> Shift(NDArray<#= type.Name #> a, int[] shift)
+        {
+            if (shift.Length != a.Shape.Length) throw new ArgumentException("Dimensions of shift do not match those of a.");
+
+            // Initialise shifted as a zeroed signature of same shape as a.
+            NDArray<#= type.Name #> result = new NDArray<#= type.Name #>(a.Shape);
+
+            int rank = a.Rank;
+
+            // Calculate the total stride between an index and the index to which its value is shifted.
+            int shiftStride = 0;
+            for (int i = 0; i < rank; i++)
+            {
+                shiftStride += shift[i] * a.Strides[i];
+            }
+
+            // Get the lower and upper indices in each dimension for the values that will be shifted.
+            int[] lowerIndices = new int[shift.Length];
+            int[] uppderIndices = new int[shift.Length];
+            for (int dim = 0; dim < rank; dim++)
+            {
+                lowerIndices[dim] = 0;
+                uppderIndices[dim] = a.Shape[dim] - shift[dim] - 1;
+            }
+
+            foreach (var index in ValueIndices(a.Rank, a.Strides, lowerIndices, uppderIndices))
+            {
+                result._values[index + shiftStride] = a._values[index];
+            }
+
+            return result;
+        }
+
+        public static bool ArrayEqual(NDArray<#= type.Name #> a, NDArray<#= type.Name #> b)
+        {
+            return a.Shape.SequenceEqual(b.Shape) && a._values.SequenceEqual(b._values);
+        }
+
+        public NDArray<#= type.Name #>(int[] shape)
+        {
+            this.Shape = shape;
+
+            // Create array to hold values.
+            int valuesCount = 1;
+            for (int i = 0; i < shape.Length; i++)
+            {
+                valuesCount *= shape[i];
+            }
+            this._values = new <#= type.Name #>[valuesCount];
+
+            // Compute strides.
+            Strides = new int[shape.Length];
+            Strides[shape.Length - 1] = 1;
+            for (int i = Strides.Length - 2; i >= 0; i--)
+            {
+                Strides[i] = Strides[i + 1] * Shape[i + 1];
+            }
+        }
+        /// <summary>
+        /// Creates a NDArray<#= type.Name #> as a deep copy of an existing NDArray<#= type.Name #>.
+        /// </summary>
+        /// <param name="source">The NDArray to copy.</param>
+        public NDArray<#= type.Name #>(NDArray<#= type.Name #> source)
+        { 
+            this.Shape = new int[source.Shape.Length];
+            source.Shape.CopyTo(this.Shape, 0);
+            this._values = new <#= type.Name #>[source._values.Length];
+            source._values.CopyTo(this._values, 0);
+            this.Strides = new int[Shape.Length];
+            source.Strides.CopyTo(this.Strides, 0);
+        }
+
+        private void CheckIndexValid(int[] index)
+        {
+            if (index.Length != Shape.Length) throw new ArgumentException("Number of dimensions does not match.");
+
+            for (int i = 0; i < index.Length; i++)
+            {
+                if (index[i] >= Shape[i]) throw new ArgumentException("Index out of range for dimension {0}", i.ToString());
+            }
+
+        }
+
+        private int ConvertIndexToArrayIndex(int[] index)
+        {
+            int arrayIndex = 0;
+            for (int i = 0; i < index.Length; i++)
+            {
+                arrayIndex += index[i] * Strides[i];
+            }
+
+            return arrayIndex;
+        }
+
+        public <#= type.Name #> GetValue(int[] index)
+        {
+            CheckIndexValid(index);
+
+            int arrayIndex = ConvertIndexToArrayIndex(index);
+       
+            return _values[arrayIndex];
+        }
+
+        public void SetValue(int[] index, <#= type.Name #> value)
+        {
+            CheckIndexValid(index);
+
+            int arrayIndex = ConvertIndexToArrayIndex(index);
+
+            _values[arrayIndex] = value;
+        }
+
+        public <#= type.Name #> GetAndSetValue(int[] index, <#= type.Name #> value)
+        {
+            CheckIndexValid(index);
+
+            int arrayIndex = ConvertIndexToArrayIndex(index);
+
+            <#= type.Name #> oldValue = _values[arrayIndex];
+
+            _values[arrayIndex] = value;
+
+            return oldValue;
+        }
+
+        public void SumWith(NDArray<#= type.Name #> a)
+        {
+            if (!Shape.SequenceEqual(a.Shape)) throw new ArgumentException("Shapes of arrays do not match.");
+
+            for (int i = 0; i < a._values.Length; i++)
+            {
+                _values[i] += a._values[i];
+            }
+        }
+
+        public override string ToString()
+        {
+            StringBuilder builder = new StringBuilder("array(");
+
+            BuildString(0, 0, builder);
+
+            builder.Append(")");
+
+            return builder.ToString();
+        }
+
+        private void BuildString(int dim, int currentIndex, StringBuilder builder)
+        {
+            if(dim == Rank - 1)
+            {
+                builder.Append("[");
+                for (int i = currentIndex; i <currentIndex + Shape[Rank - 1]; i++)
+                {
+                    builder.Append(_values[i].ToString() + ", ");
+                }
+                builder.Append("]");
+            }
+            else
+            {
+                builder.Append("[");
+                while(currentIndex < _values.Length)
+                {
+                    BuildString(dim + 1, currentIndex, builder);
+                    currentIndex += Strides[dim];
+                }
+                builder.Append("],");
+            }
+        }
+		}
+		<# 
+		} #>
+    }
+	
